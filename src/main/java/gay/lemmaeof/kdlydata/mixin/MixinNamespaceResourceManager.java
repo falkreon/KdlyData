@@ -5,7 +5,9 @@ import gay.lemmaeof.kdlydata.Hooks;
 import it.unimi.dsi.fastutil.objects.Object2IntMap;
 import it.unimi.dsi.fastutil.objects.ObjectIterator;
 import net.minecraft.resource.NamespaceResourceManager;
+import net.minecraft.resource.NamespaceResourceManager.ResourceEntries;
 import net.minecraft.resource.Resource;
+import net.minecraft.resource.ResourceIoSupplier;
 import net.minecraft.resource.ResourceMetadata;
 import net.minecraft.resource.ResourceType;
 import net.minecraft.resource.pack.ResourcePack;
@@ -41,7 +43,7 @@ public abstract class MixinNamespaceResourceManager {
 	@Shadow @Final protected List<NamespaceResourceManager.PackEntry> packs;
 	@Shadow @Final private ResourceType type;
 
-	@Shadow protected abstract Resource.InputSupplier<ResourceMetadata> getMetadataReader(Identifier path, int packIndex);
+	@Shadow protected abstract ResourceIoSupplier<ResourceMetadata> getMetadataReader(Identifier path, int packIndex);
 
 	@Shadow @Final private static Logger LOGGER;
 
@@ -87,7 +89,8 @@ public abstract class MixinNamespaceResourceManager {
 
 				found.clear();
 			} else if (packEntry.isExcludedFromLowerPriority(metaId)) {
-				found.forEach(NamespaceResourceManager.ResourceEntry::markMetadataAsAbsent);
+				//TODO: THIS IS A MAJOR POINT OF CONFLICT
+				//found.forEach(NamespaceResourceManager.ResourceEntry::markMetadataAsAbsent);
 			}
 
 			ResourcePack resourcePack = packEntry.pack();
@@ -101,7 +104,7 @@ public abstract class MixinNamespaceResourceManager {
 		}
 
 		for (NamespaceResourceManager.ResourceEntry entry : found) {
-			ret.add(Hooks.entryAsKdlyResource((NamespaceResourceManagerAccessor) this, entry));
+			ret.add(Hooks.entryAsKdlyResource((NamespaceResourceManagerAccessor) (Object) this, found, entry));
 		}
 		info.setReturnValue(ret);
 	}
@@ -114,9 +117,9 @@ public abstract class MixinNamespaceResourceManager {
 	@Inject(method = "findResources", at = @At(value = "INVOKE", target = "net/minecraft/resource/pack/ResourcePack.findResources(Lnet/minecraft/resource/ResourceType;Ljava/lang/String;Ljava/lang/String;Ljava/util/function/Predicate;)Ljava/util/Collection;"), locals = LocalCapture.CAPTURE_FAILEXCEPTION)
 	private void appendKdlFiles(String startingPath, Predicate<Identifier> pathFilter, CallbackInfoReturnable<Map<Identifier, Resource>> info, Object2IntMap<Identifier> foundIds, int totalPacks, int i, NamespaceResourceManager.PackEntry entry) {
 		if (Hooks.predicateIsJson.get()) {
-			for (Identifier identifier : entry.pack().findResources(this.type, this.namespace, startingPath, kdlydata$KDLY_FILTER)) {
-				foundIds.put(identifier, i);
-			}
+			entry.pack().listResources(this.type, this.namespace, startingPath, (id, supplier) -> {
+				if (kdlydata$KDLY_FILTER.test(id)) foundIds.put(id, i);
+			});
 		}
 	}
 
@@ -137,7 +140,7 @@ public abstract class MixinNamespaceResourceManager {
 				ResourcePack pack = kdlydata$resourcePack.get();
 				args.set(0, jsonishId);
 				try {
-					args.set(1, new Resource(pack.getName(), Hooks.getKdlyInputStreamSupplier((NamespaceResourceManagerAccessor) this, id, pack), this.getMetadataReader(jsonishId, kdlydata$packIndex.get())));
+					args.set(1, new Resource(pack, Hooks.getKdlyInputStreamSupplier((NamespaceResourceManagerAccessor) this, id, pack), this.getMetadataReader(jsonishId, kdlydata$packIndex.get())));
 				} catch (IOException | IllegalArgumentException e) {
 					throw new RuntimeException(e);
 				}
@@ -155,15 +158,16 @@ public abstract class MixinNamespaceResourceManager {
 		if (Hooks.predicateIsJson.get()) {
 			ResourcePack resourcePack = pack.pack();
 			if (resourcePack != null) {
-				for(Identifier id : resourcePack.findResources(this.type, this.namespace, startingPath, kdlydata$KDLY_FILTER)) {
+				resourcePack.listResources(this.type, this.namespace, startingPath, (id, accessor) -> {
+					
+					if (!kdlydata$KDLY_FILTER.test(id)) return;
+					
 					Identifier jsonishId = new Identifier(id.getNamespace(), id.getPath().replace(".kdl", ".json"));
 					Identifier metaId = getMetadataPath(jsonishId);
-					resources.computeIfAbsent(
-							jsonishId, identifier2x -> ResourceEntriesAccessor.invokeInit(metaId, Lists.newArrayList())
-					)
-							.entries()
-							.add(ResourceEntryAccessor.invokeInit((NamespaceResourceManager) (Object) this, id, metaId, resourcePack));
-				}
+					ResourceEntries resEntries = resources.computeIfAbsent(jsonishId, identifier2x -> ResourceEntriesAccessor.invokeInit(metaId, Lists.newArrayList()));
+					
+					resEntries.fileSources().add(ResourceEntryAccessor.invokeInit((NamespaceResourceManager) (Object) this, id, metaId, resourcePack));
+				});
 			}
 		}
 	}
@@ -174,18 +178,25 @@ public abstract class MixinNamespaceResourceManager {
 	}
 
 	@Mixin(NamespaceResourceManager.ResourceEntries.class)
-	private static class MixinResourceEntries {
-		@Shadow @Final List<NamespaceResourceManager.ResourceEntry> entries;
+	private static abstract class MixinResourceEntries {
+		@Shadow abstract Identifier path();
+		@Shadow abstract Identifier metadataId();
+		@Shadow abstract List<NamespaceResourceManager.ResourceEntry> fileSources();
 
 		@Inject(method = "getResources", at = @At("HEAD"), cancellable = true)
 		private void hookKdlResources(CallbackInfoReturnable<List<Resource>> info) {
 			if (Hooks.predicateIsJson.get()) {
 				List<Resource> ret = new ArrayList<>();
-				for (NamespaceResourceManager.ResourceEntry entry : this.entries) {
-					if (((ResourceEntryAccessor)entry).getId().getPath().endsWith(".kdl")) {
-						ret.add(Hooks.entryAsKdlyResource(Hooks.thisManager.get(), entry));
+				
+				
+				for (NamespaceResourceManager.ResourceEntry entry : this.fileSources()) {
+					
+					if (this.path().getPath().endsWith(".kdl")) {
+						Resource kdlyResource = Hooks.entryAsKdlyResource(Hooks.thisManager.get(), (ResourceEntries) (Object) this, entry);
+						ret.add(kdlyResource);
 					} else {
-						ret.add(entry.asResource());
+						Resource resource = Hooks.entryAsResource(Hooks.thisManager.get(), (ResourceEntries) (Object) this, entry);
+						ret.add(resource);
 					}
 				}
 				info.setReturnValue(ret);
