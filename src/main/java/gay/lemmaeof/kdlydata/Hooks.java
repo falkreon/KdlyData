@@ -3,6 +3,7 @@ package gay.lemmaeof.kdlydata;
 import com.google.gson.JsonElement;
 import dev.hbeck.kdl.objects.KDLDocument;
 import dev.hbeck.kdl.parse.KDLParser;
+import gay.lemmaeof.kdlydata.mixin.MixinNamespaceResourceManager.ResourceEntryAccessor;
 import gay.lemmaeof.kdlydata.mixin.NamespaceResourceManagerAccessor;
 import net.minecraft.resource.NamespaceResourceManager;
 import net.minecraft.resource.Resource;
@@ -45,6 +46,17 @@ public class Hooks {
 			} else {
 				return new Resource(entry.source(), resourceSupplier);
 			}
+			
+		} catch (IOException ex) {
+			throw new RuntimeException(ex);
+		}
+	}
+	
+	public static NamespaceResourceManager.ResourceEntry entryAsKdlyEntry(NamespaceResourceManagerAccessor manager, NamespaceResourceManager.ResourceEntries entries, NamespaceResourceManager.ResourceEntry entry) {
+		try {
+			ResourceIoSupplier<InputStream> resourceSupplier = getKdlyInputStreamSupplier(manager, entries.path(), entry.source());
+			
+			return ResourceEntryAccessor.invokeInit(entry.source(), resourceSupplier);
 			
 		} catch (IOException ex) {
 			throw new RuntimeException(ex);

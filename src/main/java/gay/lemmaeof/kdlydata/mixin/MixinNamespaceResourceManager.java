@@ -1,11 +1,9 @@
 package gay.lemmaeof.kdlydata.mixin;
 
-import com.google.common.collect.Lists;
 import gay.lemmaeof.kdlydata.Hooks;
 import it.unimi.dsi.fastutil.objects.Object2IntMap;
 import it.unimi.dsi.fastutil.objects.ObjectIterator;
 import net.minecraft.resource.NamespaceResourceManager;
-import net.minecraft.resource.NamespaceResourceManager.ResourceEntries;
 import net.minecraft.resource.Resource;
 import net.minecraft.resource.ResourceIoSupplier;
 import net.minecraft.resource.ResourceMetadata;
@@ -17,7 +15,6 @@ import org.slf4j.Logger;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
-import org.spongepowered.asm.mixin.gen.Accessor;
 import org.spongepowered.asm.mixin.gen.Invoker;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -94,13 +91,22 @@ public abstract class MixinNamespaceResourceManager {
 
 				found.clear();
 			} else if (packEntry.isExcludedFromLowerPriority(metaId)) {
-				
 				//TODO: THIS IS A MAJOR POINT OF CONFLICT
 				//found.forEach(NamespaceResourceManager.ResourceEntry::markMetadataAsAbsent);
 			}
 
 			ResourcePack resourcePack = packEntry.pack();
 			if (resourcePack != null && Hooks.hasResource(resourcePack, this.type, kdlId)) {
+				try {
+					ResourceIoSupplier<InputStream> supplier = Hooks.getKdlyInputStreamSupplier((NamespaceResourceManagerAccessor) (Object) this, kdlId, resourcePack);
+					NamespaceResourceManager.ResourceEntry entry = ResourceEntryAccessor.invokeInit(resourcePack, supplier);
+					NamespaceResourceManager.ResourceEntries entries = ResourceEntriesAccessor.invokeInit(kdlId, metaId, new ArrayList<>(), new HashMap<>());
+					
+					//Hooks.entryAsKdlyResource(this, entries, entry);
+				} catch (IOException ex) {
+					ex.printStackTrace();
+					return;
+				}
 				//TODO: ANOTHER POINT OF CONFLICT
 				//found.add(ResourceEntryAccessor.invokeInit((NamespaceResourceManager) (Object) this, kdlId, metaId, resourcePack));
 			}
@@ -112,6 +118,7 @@ public abstract class MixinNamespaceResourceManager {
 
 		for (NamespaceResourceManager.ResourceEntry entry : found) {
 			//TODO: THIS IS A MAJOR POINT OF CONFLICT
+			
 			//ret.add(Hooks.entryAsKdlyResource((NamespaceResourceManagerAccessor) (Object) this, found, entry));
 		}
 		info.setReturnValue(ret);
@@ -185,41 +192,38 @@ public abstract class MixinNamespaceResourceManager {
 	private void cacheResourceManager(String startingPath, Predicate<Identifier> pathFilter, CallbackInfoReturnable<Map<Identifier, List<Resource>>> info) {
 		Hooks.thisManager.set((NamespaceResourceManagerAccessor) this);
 	}
-
-	//TODO: fuck.
 	
 	@Mixin(NamespaceResourceManager.ResourceEntries.class)
 	private static abstract class MixinResourceEntries {
 		
-		/*
+		@Shadow @Final private List<NamespaceResourceManager.ResourceEntry> fileSources;
+		
+		
 		@Shadow abstract Identifier path();
 		@Shadow abstract Identifier metadataId();
-		@Shadow abstract List<NamespaceResourceManager.ResourceEntry> fileSources();
 		
-		@Inject(method = "resources", at = @At("HEAD"), cancellable = true)
-		private void hookKdlResources(CallbackInfoReturnable<List<Resource>> info) {
+		@Inject(method = "fileSources", at = @At("HEAD"), cancellable = true)
+		private void hookKdlResources(CallbackInfoReturnable<List<NamespaceResourceManager.ResourceEntry>> info) {
 			if (Hooks.predicateIsJson.get()) {
-				List<Resource> ret = new ArrayList<>();
+				List<NamespaceResourceManager.ResourceEntry> ret = new ArrayList<>();
 				
 				
-				for (NamespaceResourceManager.ResourceEntry entry : this.fileSources()) {
+				for (NamespaceResourceManager.ResourceEntry entry : this.fileSources) {
 					
 					if (this.path().getPath().endsWith(".kdl")) {
-						Resource kdlyResource = Hooks.entryAsKdlyResource(Hooks.thisManager.get(), (ResourceEntries) (Object) this, entry);
-						ret.add(kdlyResource);
+						ret.add(Hooks.entryAsKdlyEntry(Hooks.thisManager.get(), (NamespaceResourceManager.ResourceEntries) (Object) this, entry));
 					} else {
-						Resource resource = Hooks.entryAsResource(Hooks.thisManager.get(), (ResourceEntries) (Object) this, entry);
-						ret.add(resource);
+						ret.add(entry);
 					}
 				}
 				info.setReturnValue(ret);
 			}
-		}*/
+		}
 	}
 	
 	
 	@Mixin(NamespaceResourceManager.ResourceEntries.class)
-	private interface ResourceEntriesAccessor {
+	private static interface ResourceEntriesAccessor {
 		@Invoker("<init>")
 		static NamespaceResourceManager.ResourceEntries invokeInit(
 				Identifier path,
@@ -233,7 +237,7 @@ public abstract class MixinNamespaceResourceManager {
 
 	
 	@Mixin(NamespaceResourceManager.ResourceEntry.class)
-	public interface ResourceEntryAccessor {
+	public static interface ResourceEntryAccessor {
 		
 		@Invoker("<init>")
 		static NamespaceResourceManager.ResourceEntry invokeInit(ResourcePack source, ResourceIoSupplier<InputStream> resource) {
