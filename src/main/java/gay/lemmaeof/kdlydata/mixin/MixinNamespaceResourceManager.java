@@ -28,7 +28,9 @@ import org.spongepowered.asm.mixin.injection.callback.LocalCapture;
 import org.spongepowered.asm.mixin.injection.invoke.arg.Args;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -58,13 +60,16 @@ public abstract class MixinNamespaceResourceManager {
 	@Inject(method = "getResource", at = @At(value = "INVOKE", target = "net/minecraft/resource/NamespaceResourceManager$PackEntry.isExcludedFromLowerPriority(Lnet/minecraft/util/Identifier;)Z"), cancellable = true, locals = LocalCapture.CAPTURE_FAILEXCEPTION)
 	private void hookGetResource(Identifier id, CallbackInfoReturnable<Optional<Resource>> info, int i) {
 		if (!id.getPath().endsWith(".json")) return;
-		Identifier kdlId = new Identifier(id.getNamespace(), id.getPath().replace(".json", ".kdl"));
+		Identifier kdlId = new Identifier(id.getNamespace(), id.getPath().replace(".json", ".kdl")); //TODO: Chop 4 chars off the end and append "kdl" instead of replacing all occurrences
 		NamespaceResourceManager.PackEntry packEntry = this.packs.get(i);
 		ResourcePack resourcePack = packEntry.pack();
-		if (resourcePack != null && resourcePack.contains(this.type, kdlId)) {
+		
+		if (resourcePack != null && Hooks.hasResource(resourcePack, this.type, kdlId)) {
 			try {
+				ResourceIoSupplier<InputStream> kdlyResourceSupplier = Hooks.getKdlyInputStreamSupplier((NamespaceResourceManagerAccessor) (Object) this, kdlId, resourcePack);
+				
 				info.setReturnValue(Optional.of(
-						new Resource(resourcePack.getName(), Hooks.getKdlyInputStreamSupplier((NamespaceResourceManagerAccessor) this, kdlId, resourcePack), this.getMetadataReader(id, i))
+						new Resource(resourcePack, kdlyResourceSupplier, this.getMetadataReader(id, i))
 				));
 			} catch (IOException | IllegalArgumentException e) {
 				LOGGER.warn("Resource {} failed to process from KDL: {}", kdlId, e);
@@ -77,7 +82,7 @@ public abstract class MixinNamespaceResourceManager {
 		List<Resource> ret = new ArrayList<>(info.getReturnValue());
 		List<NamespaceResourceManager.ResourceEntry> found = new ArrayList<>();
 
-		Identifier kdlId = new Identifier(id.getNamespace(), id.getPath().replace(".json", ".kdl"));
+		Identifier kdlId = new Identifier(id.getNamespace(), id.getPath().replace(".json", ".kdl")); //TODO: Chop 4 chars off the end and append "kdl" instead of replacing all occurrences
 		Identifier metaId = getMetadataPath(id);
 		String string = null;
 
@@ -89,13 +94,15 @@ public abstract class MixinNamespaceResourceManager {
 
 				found.clear();
 			} else if (packEntry.isExcludedFromLowerPriority(metaId)) {
+				
 				//TODO: THIS IS A MAJOR POINT OF CONFLICT
 				//found.forEach(NamespaceResourceManager.ResourceEntry::markMetadataAsAbsent);
 			}
 
 			ResourcePack resourcePack = packEntry.pack();
-			if (resourcePack != null && resourcePack.contains(this.type, kdlId)) {
-				found.add(ResourceEntryAccessor.invokeInit((NamespaceResourceManager) (Object) this, kdlId, metaId, resourcePack));
+			if (resourcePack != null && Hooks.hasResource(resourcePack, this.type, kdlId)) {
+				//TODO: ANOTHER POINT OF CONFLICT
+				//found.add(ResourceEntryAccessor.invokeInit((NamespaceResourceManager) (Object) this, kdlId, metaId, resourcePack));
 			}
 		}
 
@@ -104,7 +111,8 @@ public abstract class MixinNamespaceResourceManager {
 		}
 
 		for (NamespaceResourceManager.ResourceEntry entry : found) {
-			ret.add(Hooks.entryAsKdlyResource((NamespaceResourceManagerAccessor) (Object) this, found, entry));
+			//TODO: THIS IS A MAJOR POINT OF CONFLICT
+			//ret.add(Hooks.entryAsKdlyResource((NamespaceResourceManagerAccessor) (Object) this, found, entry));
 		}
 		info.setReturnValue(ret);
 	}
@@ -164,9 +172,10 @@ public abstract class MixinNamespaceResourceManager {
 					
 					Identifier jsonishId = new Identifier(id.getNamespace(), id.getPath().replace(".kdl", ".json"));
 					Identifier metaId = getMetadataPath(jsonishId);
-					ResourceEntries resEntries = resources.computeIfAbsent(jsonishId, identifier2x -> ResourceEntriesAccessor.invokeInit(metaId, Lists.newArrayList()));
 					
-					resEntries.fileSources().add(ResourceEntryAccessor.invokeInit((NamespaceResourceManager) (Object) this, id, metaId, resourcePack));
+					NamespaceResourceManager.ResourceEntries resEntries = resources.computeIfAbsent(jsonishId, identifier2x -> ResourceEntriesAccessor.invokeInit(jsonishId, metaId, new ArrayList<>(), new HashMap<>()));
+					NamespaceResourceManager.ResourceEntry resEntry = ResourceEntryAccessor.invokeInit(pack.pack(), accessor);
+					resEntries.fileSources().add(resEntry);
 				});
 			}
 		}
@@ -177,13 +186,17 @@ public abstract class MixinNamespaceResourceManager {
 		Hooks.thisManager.set((NamespaceResourceManagerAccessor) this);
 	}
 
+	//TODO: fuck.
+	
 	@Mixin(NamespaceResourceManager.ResourceEntries.class)
 	private static abstract class MixinResourceEntries {
+		
+		/*
 		@Shadow abstract Identifier path();
 		@Shadow abstract Identifier metadataId();
 		@Shadow abstract List<NamespaceResourceManager.ResourceEntry> fileSources();
-
-		@Inject(method = "getResources", at = @At("HEAD"), cancellable = true)
+		
+		@Inject(method = "resources", at = @At("HEAD"), cancellable = true)
 		private void hookKdlResources(CallbackInfoReturnable<List<Resource>> info) {
 			if (Hooks.predicateIsJson.get()) {
 				List<Resource> ret = new ArrayList<>();
@@ -201,35 +214,31 @@ public abstract class MixinNamespaceResourceManager {
 				}
 				info.setReturnValue(ret);
 			}
-		}
+		}*/
 	}
-
+	
+	
 	@Mixin(NamespaceResourceManager.ResourceEntries.class)
 	private interface ResourceEntriesAccessor {
 		@Invoker("<init>")
-		static NamespaceResourceManager.ResourceEntries invokeInit(Identifier metaId, List<NamespaceResourceManager.ResourceEntry> resources) {
+		static NamespaceResourceManager.ResourceEntries invokeInit(
+				Identifier path,
+				Identifier metadataId,
+				List<NamespaceResourceManager.ResourceEntry> fileSources,
+				Map<ResourcePack, ResourceIoSupplier<InputStream>> metadataSources
+				) {
 			throw new AssertionError("impossible");
 		}
 	}
 
+	
 	@Mixin(NamespaceResourceManager.ResourceEntry.class)
 	public interface ResourceEntryAccessor {
+		
 		@Invoker("<init>")
-		static NamespaceResourceManager.ResourceEntry invokeInit(NamespaceResourceManager manager, Identifier id, Identifier metadataId, ResourcePack pack) {
+		static NamespaceResourceManager.ResourceEntry invokeInit(ResourcePack source, ResourceIoSupplier<InputStream> resource) {
 			throw new AssertionError("impossible");
 		}
-
-		@Accessor
-		Identifier getId();
-
-		@Accessor
-		Identifier getMetadataId();
-
-		@Accessor
-		ResourcePack getSource();
-
-		@Accessor
-		boolean getHasMetadata();
 	}
 
 	@Mixin(NamespaceResourceManager.PackEntry.class)

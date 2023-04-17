@@ -8,6 +8,7 @@ import net.minecraft.resource.NamespaceResourceManager;
 import net.minecraft.resource.Resource;
 import net.minecraft.resource.ResourceIoSupplier;
 import net.minecraft.resource.ResourceMetadata;
+import net.minecraft.resource.ResourceType;
 import net.minecraft.resource.pack.ResourcePack;
 import net.minecraft.util.Identifier;
 
@@ -15,6 +16,7 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 
 public class Hooks {
 	private static final KDLParser PARSER = new KDLParser();
@@ -60,6 +62,16 @@ public class Hooks {
 		} else {
 			return new Resource(entry.source(), resourceSupplier);
 		}
+	}
+	
+	public static boolean hasResource(ResourcePack pack, ResourceType type, Identifier id) {
+		record Result(Identifier id, ResourceIoSupplier<InputStream> supplier) {};
 		
+		ArrayList<Result> results = new ArrayList<>();
+		pack.listResources(type, id.getNamespace(), id.getPath(), (resId, ioSupplier)->{
+			results.add(new Result(resId, ioSupplier));
+		});
+		
+		return results.size()>0;
 	}
 }

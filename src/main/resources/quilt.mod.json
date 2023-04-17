@@ -14,13 +14,15 @@
       }
     },
     "intermediate_mappings": "net.fabricmc:intermediary",
-    "environment": "*",
     "depends": [
       {
         "id": "quilt_loader",
         "versions": "*"
       }
     ]
+  },
+  "minecraft": {
+    "environment": "*"
   },
   "mixin": "mixins.kdlydata.json",
   "access_widener": "kdlydata.accesswidener"
